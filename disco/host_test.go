@@ -1,4 +1,6 @@
 // Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
 
 package disco
 
@@ -54,6 +56,64 @@ func TestHostServiceURL(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.ID, func(t *testing.T) {
 			serviceURL, err := host.ServiceURL(test.ID)
+			if (err != nil || test.err != "") &&
+				(err == nil || !strings.Contains(err.Error(), test.err)) {
+				t.Fatalf("unexpected service URL error: %s", err)
+			}
+
+			var got string
+			if serviceURL != nil {
+				got = serviceURL.String()
+			} else {
+				got = "<nil>"
+			}
+
+			if got != test.want {
+				t.Errorf("wrong result\ngot:  %s\nwant: %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestHostServiceURLFromURITemplateLevel1(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.com/disco/foo.json")
+	host := Host{
+		discoURL: baseURL,
+		hostname: "test-server",
+		services: map[string]interface{}{
+			"absolute.v1":         "http://example.net/foo/{bar}",
+			"absolutewithport.v1": "http://example.net:8080/foo/{bar}",
+			"relative.v1":         "./{bar}/",
+			"rootrelative.v1":     "/{bar}",
+			"protorelative.v1":    "//example.net/{bar}",
+			"withfragment.v1":     "http://example.org/{bar}#foo",
+			"querystring.v1":      "https://example.net/{bar}?foo=baz",
+			"nothttp.v1":          "ftp://127.0.0.1/{bar}/",
+			"invalid.v1":          "***not A URL at all {bar}!:/<@@@@>***",
+		},
+	}
+
+	tests := []struct {
+		ID   string
+		want string
+		err  string
+	}{
+		{"absolute.v1", "http://example.net/foo/bar_value", ""},
+		{"absolutewithport.v1", "http://example.net:8080/foo/bar_value", ""},
+		{"relative.v1", "https://example.com/disco/bar_value/", ""},
+		{"rootrelative.v1", "https://example.com/bar_value", ""},
+		{"protorelative.v1", "https://example.net/bar_value", ""},
+		{"withfragment.v1", "http://example.org/bar_value", ""},
+		{"querystring.v1", "https://example.net/bar_value?foo=baz", ""},
+		{"nothttp.v1", "<nil>", "unsupported scheme"},
+		{"invalid.v1", "<nil>", `invalid service URL template: disallowed character ' ' in literal`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.ID, func(t *testing.T) {
+			serviceURL, err := host.ServiceURLFromURITemplateLevel1(test.ID, map[string]string{
+				"bar": "bar_value",
+			})
 			if (err != nil || test.err != "") &&
 				(err == nil || !strings.Contains(err.Error(), test.err)) {
 				t.Fatalf("unexpected service URL error: %s", err)

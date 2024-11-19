@@ -1,4 +1,6 @@
 // Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
 
 package disco
 
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/terraform-svchost/internal/uritemplates"
 )
 
 const versionServiceID = "versions.v1"
@@ -115,6 +118,54 @@ func (h *Host) ServiceURL(id string) (*url.URL, error) {
 	u, err := h.parseURL(urlStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse service URL: %v", err)
+	}
+
+	return u, nil
+}
+
+// ServiceURLFromURITemplateLevel1 returns a URL generated from a URI template
+// associated with the given service identifier, which should be of the form
+// "servicename.vN".
+//
+// A non-nil result is always an absolute URL with a scheme of either HTTPS
+// or HTTP.
+func (h *Host) ServiceURLFromURITemplateLevel1(id string, vars map[string]string) (*url.URL, error) {
+	svc, ver, err := parseServiceID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	// No services supported for an empty Host.
+	if h == nil || h.services == nil {
+		return nil, &ErrServiceNotProvided{service: svc}
+	}
+
+	urlTemplateStr, ok := h.services[id].(string)
+	if !ok {
+		// See if we have a matching service as that would indicate
+		// the service is supported, but not the requested version.
+		for serviceID := range h.services {
+			if strings.HasPrefix(serviceID, svc+".") {
+				return nil, &ErrVersionNotSupported{
+					hostname: h.hostname,
+					service:  svc,
+					version:  ver.Original(),
+				}
+			}
+		}
+
+		// No discovered services match the requested service.
+		return nil, &ErrServiceNotProvided{hostname: h.hostname, service: svc}
+	}
+
+	urlStr, err := uritemplates.ExpandLevel1(urlTemplateStr, vars)
+	if err != nil {
+		return nil, fmt.Errorf("invalid service URL template: %w", err)
+	}
+
+	u, err := h.parseURL(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse service URL template result: %v", err)
 	}
 
 	return u, nil
