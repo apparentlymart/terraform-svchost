@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/go-version"
+	svchost "github.com/hashicorp/terraform-svchost"
 	"github.com/hashicorp/terraform-svchost/internal/uritemplates"
 )
 
@@ -169,6 +171,73 @@ func (h *Host) ServiceURLFromURITemplateLevel1(id string, vars map[string]string
 	}
 
 	return u, nil
+}
+
+// ServiceOCIRepositoryFromURITempalteLevel1 returns an OCI Distribution repository
+// address derived from a URI template associated with the given service identifier,
+// which should be of the form "servicename.vN".
+//
+// The template must produce a string of the form HOSTNAME/NAME, where "HOSTNAME"
+// is an OCI registry hostname optionally followed by a colon and then a port
+// number, and "NAME" is a sequence of characters matching the "<name>" pattern
+// as defined in OCI Distribution v1.0.0.
+//
+// The first two results are the hostname and name from the template result,
+// respectively. These are the two parameters required for the "Content Discovery"
+// operation defined in OCI distribution v1.0.0, which enumerates the tags
+// available in the given repository.
+//
+// OCI repository addresses are not actually URIs, but use a similar enough syntax
+// that we can use the URI template syntax recommended by IETF as opposed to some
+// proprietary template syntax.
+func (h *Host) ServiceOCIRepositoryFromURITemplateLevel1(id string, vars map[string]string) (hostname, name string, err error) {
+	svc, ver, err := parseServiceID(id)
+	if err != nil {
+		return "", "", err
+	}
+
+	// No services supported for an empty Host.
+	if h == nil || h.services == nil {
+		return "", "", &ErrServiceNotProvided{service: svc}
+	}
+
+	addrTemplateStr, ok := h.services[id].(string)
+	if !ok {
+		// See if we have a matching service as that would indicate
+		// the service is supported, but not the requested version.
+		for serviceID := range h.services {
+			if strings.HasPrefix(serviceID, svc+".") {
+				return "", "", &ErrVersionNotSupported{
+					hostname: h.hostname,
+					service:  svc,
+					version:  ver.Original(),
+				}
+			}
+		}
+
+		// No discovered services match the requested service.
+		return "", "", &ErrServiceNotProvided{hostname: h.hostname, service: svc}
+	}
+
+	addrStr, err := uritemplates.ExpandLevel1(addrTemplateStr, vars)
+
+	// The OCI repository name pattern allows only a subset of the characters
+	// valid in a URI, so the result of template rendering might not actually
+	// have a valid "name" part. We'll check that here before we return.
+	slash := strings.IndexByte(addrStr, '/')
+	if slash == -1 {
+		return "", "", fmt.Errorf("service address template returned an address without a hostname")
+	}
+	hostname = addrStr[:slash]
+	name = addrStr[slash+1:]
+	if !svchost.IsValid(hostname) {
+		return "", "", fmt.Errorf("service address template returned an address with an invalid hostname")
+	}
+	if !validOCIDistributionName(name) {
+		return "", "", fmt.Errorf("service address template returned an address with an invalid OCI distribution repository name")
+	}
+
+	return hostname, name, nil
 }
 
 // ServiceOAuthClient returns the OAuth client configuration associated with the
@@ -472,4 +541,10 @@ func parseServiceID(id string) (string, *version.Version, error) {
 	}
 
 	return parts[0], parsedVersion, nil
+}
+
+var ociDistributionNamePattern = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$`)
+
+func validOCIDistributionName(given string) bool {
+	return ociDistributionNamePattern.MatchString(given)
 }

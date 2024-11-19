@@ -133,6 +133,54 @@ func TestHostServiceURLFromURITemplateLevel1(t *testing.T) {
 	}
 }
 
+func TestHostServiceOCIRepositoryFromURITemplateLevel1(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.com/disco/foo.json")
+	host := Host{
+		discoURL: baseURL,
+		hostname: "test-server",
+		services: map[string]interface{}{
+			"valid.v1":            "example.com/{namespace}/provider-{type}",
+			"valid-portnum.v1":    "example.com:5000/{namespace}/provider-{type}",
+			"missing-hostname.v1": "missing-hostname-{namespace}-{type}",
+			"invalid-hostname.v1": "!!!!/{namespace}/provider-{type}",
+			"invalid-name.v1":     "example.com/!!!!/{type}",
+		},
+	}
+
+	tests := []struct {
+		ID           string
+		wantHostname string
+		wantName     string
+		err          string
+	}{
+		{"valid.v1", "example.com", "foo/provider-bar", ``},
+		{"valid-portnum.v1", "example.com:5000", "foo/provider-bar", ``},
+		{"missing-hostname.v1", "", "", `service address template returned an address without a hostname`},
+		{"invalid-hostname.v1", "", "", `service address template returned an address with an invalid hostname`},
+		{"invalid-name.v1", "", "", `service address template returned an address with an invalid OCI distribution repository name`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.ID, func(t *testing.T) {
+			gotHostname, gotName, err := host.ServiceOCIRepositoryFromURITemplateLevel1(test.ID, map[string]string{
+				"namespace": "foo",
+				"type":      "bar",
+			})
+			if (err != nil || test.err != "") &&
+				(err == nil || !strings.Contains(err.Error(), test.err)) {
+				t.Fatalf("unexpected service URL error: %s", err)
+			}
+
+			if gotHostname != test.wantHostname {
+				t.Errorf("wrong hostname\ngot:  %s\nwant: %s", gotHostname, test.wantHostname)
+			}
+			if gotName != test.wantName {
+				t.Errorf("wrong name\ngot:  %s\nwant: %s", gotName, test.wantName)
+			}
+		})
+	}
+}
+
 func TestHostServiceOAuthClient(t *testing.T) {
 	baseURL, _ := url.Parse("https://example.com/disco/foo.json")
 	host := Host{
